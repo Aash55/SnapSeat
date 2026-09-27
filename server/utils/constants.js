@@ -1,0 +1,39 @@
+const ROLES = {
+  ATTENDEE: 'attendee',
+  ORGANIZER: 'organizer',
+};
+
+const EVENT_CATEGORIES = ['Concert', 'Comedy', 'Sports', 'Theatre'];
+
+const SEAT_STATUS = {
+  FREE: 'free',
+  HELD: 'held',
+  BOOKED: 'booked',
+};
+
+const BOOKING_STATUS = {
+  CONFIRMED: 'CONFIRMED',
+  REFUND_PENDING: 'REFUND_PENDING',
+};
+
+const PAYMENT_STATUS = {
+  PENDING: 'PENDING',
+  SUCCESS: 'SUCCESS',
+  FAILED: 'FAILED',
+  REFUND_PENDING: 'REFUND_PENDING',
+};
+
+const HOLD_TTL_MINUTES = 15;
+const HOLD_MAX_SEATS = 4;
+const EXPIRY_WORKER_INTERVAL_SECONDS = 30;
+
+module.exports = {
+  ROLES,
+  EVENT_CATEGORIES,
+  SEAT_STATUS,
+  BOOKING_STATUS,
+  PAYMENT_STATUS,
+  HOLD_TTL_MINUTES,
+  HOLD_MAX_SEATS,
+  EXPIRY_WORKER_INTERVAL_SECONDS,
+};
