@@ -274,7 +274,7 @@ export default function OrgAnalyticsPage() {
               <div className="flex justify-between items-center gap-3 px-5 md:px-6 py-5 border-b border-dark-border">
                 <div className="flex flex-col gap-1">
                   <h2 className="text-[17px] font-bold m-0">Bookings</h2>
-                  <span className="text-[13px] text-gray-text">{data && data.bookings.length ? `${data.bookings.length} bookings` : 'No bookings'}</span>
+                  <span className="text-[13px] text-gray-text">{data && data.bookings.length ? `${data.bookings.length} ${data.bookings.length === 1 ? 'booking' : 'bookings'}` : 'No bookings'}</span>
                 </div>
               </div>
               <div className="overflow-x-auto">
