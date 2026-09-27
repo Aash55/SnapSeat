@@ -1,5 +1,5 @@
 import { Navigate } from 'react-router-dom';
-import { useAuth } from '../context/authContext';
+import { useAuth } from '../context/useAuth';
 
 // Customer pages: attendees only. An organizer who lands here goes to their console.
 export const ProtectedRoute = ({ children }) => {

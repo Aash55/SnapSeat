@@ -1,5 +1,5 @@
 import { Link, useNavigate } from 'react-router-dom';
-import { useAuth } from '../context/authContext';
+import { useAuth } from '../context/useAuth';
 import { displayName, initials } from '../lib/format';
 
 export const Logo = ({ small = false }) => (

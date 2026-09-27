@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
-import { AuthContext } from './authContext';
+import { AuthContext } from './useAuth';
 
 // Reads the JWT's exp claim so an expired session is dropped on load instead of on the first
 // failing request.

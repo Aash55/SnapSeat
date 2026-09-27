@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { useAuth, readSessionExpired, clearSessionExpired } from '../../context/authContext';
+import { useAuth, readSessionExpired, clearSessionExpired } from '../../context/useAuth';
 import { errorMessage } from '../../services/api';
 
 export default function OrgAuthPage() {
