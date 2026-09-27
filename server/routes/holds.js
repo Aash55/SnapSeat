@@ -7,6 +7,7 @@ router.use(authMiddleware);
 router.use(requireRole('attendee'));
 
 router.post('/', holdController.createHold);
+router.get('/active', holdController.getActiveHold);
 router.get('/:holdGroupId', holdController.getHold);
 router.delete('/:holdGroupId', holdController.releaseHold);
 

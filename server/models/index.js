@@ -43,6 +43,9 @@ Seat.belongsTo(Booking, { foreignKey: 'booking_id', as: 'booking' });
 Payment.belongsTo(Booking, { foreignKey: 'booking_id', as: 'booking' });
 Payment.hasMany(WebhookEvent, { foreignKey: 'payment_id', as: 'webhookEvents' });
 
+Payment.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
+Payment.belongsTo(Event, { foreignKey: 'event_id', as: 'event' });
+
 // ── Webhook Events ──
 WebhookEvent.belongsTo(Payment, { foreignKey: 'payment_id', as: 'payment' });
 

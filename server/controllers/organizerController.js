@@ -1,402 +1,333 @@
-const { sequelize, Event, SeatCategory, Seat, Booking, Hold } = require('../models');
+const { QueryTypes } = require('sequelize');
+const { sequelize, Event, SeatCategory, Seat } = require('../models');
 const AppError = require('../utils/AppError');
-const { EVENT_CATEGORIES } = require('../utils/constants');
-const { Op } = require('sequelize');
+const v = require('../utils/validate');
+const { bookingCode } = require('../services/bookingService');
+const {
+  EVENT_CATEGORIES, MAX_SEAT_CATEGORIES, MAX_SEATS_PER_CATEGORY, MAX_SEATS_PER_EVENT, MAX_PRICE,
+} = require('../utils/constants');
+
+const APP_TZ = 'Asia/Kolkata';
+const ROW_LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+
+// Held seats whose hold already ran out count as free (same rule as the public seat map).
+const SEAT_COUNTS_SQL = `
+  SELECT s.event_id,
+         COUNT(*)::int AS total,
+         COUNT(*) FILTER (WHERE s.status = 'booked')::int AS booked,
+         COUNT(*) FILTER (WHERE s.status = 'held' AND h.expires_at > now())::int AS held
+    FROM seats s LEFT JOIN holds h ON h.seat_id = s.id
+   WHERE s.event_id IN (:eventIds)
+   GROUP BY s.event_id`;
+
+async function seatCountsByEvent(eventIds) {
+  if (!eventIds.length) return {};
+  const rows = await sequelize.query(SEAT_COUNTS_SQL, { replacements: { eventIds }, type: QueryTypes.SELECT });
+  const map = {};
+  rows.forEach((r) => { map[r.event_id] = { totalSeats: r.total, bookedSeats: r.booked, heldSeats: r.held }; });
+  return map;
+}
+
+const withCounts = (event, counts) => ({
+  ...event.toJSON(),
+  ...(counts[event.id] || { totalSeats: 0, bookedSeats: 0, heldSeats: 0 }),
+});
+
+function readSeatCategories(list) {
+  if (!Array.isArray(list) || list.length === 0) throw v.bad('Add at least one seat category', 'seatCategories');
+  if (list.length > MAX_SEAT_CATEGORIES) throw v.bad(`At most ${MAX_SEAT_CATEGORIES} seat categories per event`, 'seatCategories');
+  const seen = new Set();
+  let total = 0;
+  const cats = list.map((sc, i) => {
+    const name = v.string(sc?.name, `seatCategories[${i}].name`, { max: 40 });
+    const key = name.toLowerCase();
+    if (seen.has(key)) throw v.bad(`Category name "${name}" is used twice`, 'seatCategories');
+    seen.add(key);
+    const price = Number(sc?.price);
+    if (!Number.isFinite(price) || price <= 0 || price > MAX_PRICE || Math.round(price * 100) !== price * 100) {
+      throw v.bad(`Price for ${name} must be between ₹0.01 and ₹${MAX_PRICE.toLocaleString('en-IN')}`, 'seatCategories');
+    }
+    const count = Number(sc?.count);
+    if (!Number.isInteger(count) || count < 1 || count > MAX_SEATS_PER_CATEGORY) {
+      throw v.bad(`Seats for ${name} must be between 1 and ${MAX_SEATS_PER_CATEGORY}`, 'seatCategories');
+    }
+    total += count;
+    return { name, price, count };
+  });
+  if (total > MAX_SEATS_PER_EVENT) throw v.bad(`An event can have at most ${MAX_SEATS_PER_EVENT.toLocaleString('en-IN')} seats`, 'seatCategories');
+  return { cats, total };
+}
+
+function readEventFields(body, { partial }) {
+  const out = {};
+  const has = (k) => body[k] !== undefined;
+  if (!partial || has('title')) out.title = v.string(body.title, 'title', { max: 120 });
+  if (!partial || has('category')) out.category = v.oneOf(body.category, EVENT_CATEGORIES, 'category');
+  if (!partial || has('city')) out.city = v.string(body.city, 'city', { max: 80 });
+  if (!partial || has('venue')) out.venue = v.string(body.venue, 'venue', { max: 120 });
+  if (!partial || has('date')) out.date = v.futureDate(body.date, 'date');
+  if (has('description')) out.description = v.string(body.description, 'description', { max: 1000, optional: true });
+  return out;
+}
+
+async function findOwnedEvent(req, options = {}) {
+  const id = v.id(req.params.id, 'eventId');
+  const event = await Event.findOne({ where: { id, organizer_id: req.user.id }, ...options });
+  if (!event) throw new AppError('Event not found', 404, 'EVENT_NOT_FOUND');
+  return event;
+}
 
 exports.createEvent = async (req, res, next) => {
   try {
-    const { title, category, city, venue, date, seatCategories, description } = req.body;
+    const body = req.body || {};
+    const fields = readEventFields(body, { partial: false });
+    const { cats, total } = readSeatCategories(body.seatCategories);
 
-    if (!title || !category || !city || !venue || !date || !seatCategories || !Array.isArray(seatCategories) || seatCategories.length === 0) {
-      return next(new AppError('Missing required fields or seatCategories is empty', 400));
-    }
-
-    if (!EVENT_CATEGORIES.includes(category)) {
-      return next(new AppError('Invalid category', 400));
-    }
-
-    if (new Date(date) <= new Date()) {
-      return next(new AppError('Date must be in the future', 400));
-    }
-
-    for (const sc of seatCategories) {
-      if (!sc.name || typeof sc.price !== 'number' || sc.price <= 0 || !Number.isInteger(sc.count) || sc.count <= 0) {
-        return next(new AppError('Invalid seatCategory data', 400));
-      }
-    }
-
-    const t = await sequelize.transaction();
-    try {
-      const event = await Event.create({
-        title,
-        category,
-        city,
-        venue,
-        date,
-        description,
-        organizer_id: req.user.id
-      }, { transaction: t });
-
-      const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-      let totalSeats = 0;
-      
-      for (let i = 0; i < seatCategories.length; i++) {
-        const sc = seatCategories[i];
-        const seatCategory = await SeatCategory.create({
-          event_id: event.id,
-          name: sc.name,
-          price: sc.price
-        }, { transaction: t });
-
-        const rowLetter = letters[i % 26];
-        const seats = [];
-        for (let j = 1; j <= sc.count; j++) {
-          seats.push({
-            event_id: event.id,
-            category_id: seatCategory.id,
-            seat_number: `${rowLetter}${j}`,
-            status: 'free'
-          });
+    const event = await sequelize.transaction(async (transaction) => {
+      const ev = await Event.create({ ...fields, organizer_id: req.user.id }, { transaction });
+      const seats = [];
+      for (let i = 0; i < cats.length; i++) {
+        const cat = await SeatCategory.create({ event_id: ev.id, name: cats[i].name, price: cats[i].price }, { transaction });
+        const letter = ROW_LETTERS[i];
+        for (let n = 1; n <= cats[i].count; n++) {
+          seats.push({ event_id: ev.id, category_id: cat.id, seat_number: `${letter}${n}`, status: 'free' });
         }
-        await Seat.bulkCreate(seats, { transaction: t });
-        totalSeats += sc.count;
       }
+      await Seat.bulkCreate(seats, { transaction, validate: false, returning: false });
+      return ev;
+    });
 
-      await t.commit();
-      
-      res.status(201).json({
-        message: 'Event created successfully',
-        event: {
-          id: event.id,
-          title: event.title,
-          totalSeats
-        }
-      });
-    } catch (error) {
-      await t.rollback();
-      throw error;
-    }
-  } catch (error) {
-    next(error);
+    res.status(201).json({ message: 'Event created', event: { id: event.id, title: event.title, totalSeats: total } });
+  } catch (err) {
+    next(err);
   }
 };
 
 exports.getMyEvents = async (req, res, next) => {
   try {
-    const events = await Event.findAll({
-      where: { organizer_id: req.user.id }
-    });
-
-    const result = await Promise.all(events.map(async (event) => {
-      const totalSeats = await Seat.count({ where: { event_id: event.id } });
-      const bookedSeats = await Seat.count({ where: { event_id: event.id, status: 'booked' } });
-      const heldSeats = await Seat.count({ where: { event_id: event.id, status: 'held' } });
-      
-      return {
-        ...event.toJSON(),
-        totalSeats,
-        bookedSeats,
-        heldSeats
-      };
-    }));
-
-    res.status(200).json(result);
-  } catch (error) {
-    next(error);
+    const events = await Event.findAll({ where: { organizer_id: req.user.id }, order: [['date', 'ASC']] });
+    const counts = await seatCountsByEvent(events.map((e) => e.id));
+    res.json(events.map((e) => withCounts(e, counts)));
+  } catch (err) {
+    next(err);
   }
 };
 
 exports.getMyEvent = async (req, res, next) => {
   try {
-    const event = await Event.findOne({
-      where: { id: req.params.id, organizer_id: req.user.id },
-      include: [
-        { model: SeatCategory, as: 'categories' }
-      ]
-    });
-
-    if (!event) {
-      return next(new AppError('Event not found or not owned', 404));
-    }
-
-    const totalSeats = await Seat.count({ where: { event_id: event.id } });
-    const bookedSeats = await Seat.count({ where: { event_id: event.id, status: 'booked' } });
-    const heldSeats = await Seat.count({ where: { event_id: event.id, status: 'held' } });
-
-    res.status(200).json({
-      ...event.toJSON(),
-      totalSeats,
-      bookedSeats,
-      heldSeats
-    });
-  } catch (error) {
-    next(error);
+    const event = await findOwnedEvent(req, { include: [{ model: SeatCategory, as: 'categories' }], order: [[{ model: SeatCategory, as: 'categories' }, 'id', 'ASC']] });
+    const counts = await seatCountsByEvent([event.id]);
+    res.json(withCounts(event, counts));
+  } catch (err) {
+    next(err);
   }
 };
 
 exports.updateEvent = async (req, res, next) => {
   try {
-    const event = await Event.findOne({ where: { id: req.params.id, organizer_id: req.user.id } });
-    if (!event) {
-      return next(new AppError('Event not found or not owned', 404));
+    const event = await findOwnedEvent(req);
+    const counts = await seatCountsByEvent([event.id]);
+    if (counts[event.id]?.bookedSeats > 0) {
+      throw new AppError('This event already has confirmed bookings, so its details are locked.', 409, 'EVENT_HAS_BOOKINGS');
     }
-
-    const bookedSeatsCount = await Seat.count({ where: { event_id: event.id, status: 'booked' } });
-
-    if (bookedSeatsCount > 0) {
-      return next(new AppError('Cannot modify event with confirmed bookings', 409));
-    }
-
-    const { title, category, city, venue, date, description } = req.body;
-    if (title) event.title = title;
-    if (category) event.category = category;
-    if (city) event.city = city;
-    if (venue) event.venue = venue;
-    if (date) event.date = date;
-    if (description) event.description = description;
-
-    await event.save();
-    res.status(200).json(event);
-  } catch (error) {
-    next(error);
+    const fields = readEventFields(req.body || {}, { partial: true });
+    if (!Object.keys(fields).length) throw v.bad('Nothing to update');
+    await event.update(fields);
+    res.json(withCounts(event, counts));
+  } catch (err) {
+    next(err);
   }
 };
 
 exports.deleteEvent = async (req, res, next) => {
   try {
-    const event = await Event.findOne({ where: { id: req.params.id, organizer_id: req.user.id } });
-    if (!event) {
-      return next(new AppError('Event not found or not owned', 404));
-    }
-
-    const bookedSeatsCount = await Seat.count({ where: { event_id: event.id, status: 'booked' } });
-    if (bookedSeatsCount > 0) {
-      return next(new AppError('Cannot delete event with confirmed bookings', 409));
-    }
-
-    await event.destroy();
-    res.status(200).json({ message: 'Event deleted successfully' });
-  } catch (error) {
-    next(error);
+    const event = await findOwnedEvent(req);
+    await sequelize.transaction(async (transaction) => {
+      // Lock the event's seats so no hold or booking can slip in between the check and the delete.
+      const [state] = await sequelize.query(
+        `SELECT COUNT(*) FILTER (WHERE s.status = 'booked')::int AS booked,
+                COUNT(*) FILTER (WHERE s.status = 'held')::int AS held
+           FROM (SELECT id, status FROM seats WHERE event_id = :id FOR UPDATE) s`,
+        { replacements: { id: event.id }, type: QueryTypes.SELECT, transaction }
+      );
+      if (state.booked > 0) throw new AppError('Events with confirmed bookings can’t be deleted.', 409, 'EVENT_HAS_BOOKINGS');
+      if (state.held > 0) throw new AppError('Customers are checking out for this event right now. Try again in a few minutes.', 409, 'EVENT_HAS_HOLDS');
+      await event.destroy({ transaction });
+    });
+    res.json({ message: 'Event deleted' });
+  } catch (err) {
+    next(err);
   }
 };
 
 exports.getDashboard = async (req, res, next) => {
   try {
-    const events = await Event.findAll({ where: { organizer_id: req.user.id } });
-    
-    let totalEvents = events.length;
-    let totalBookings = 0;
-    let totalRevenue = 0;
-    const breakdown = [];
+    const organizerId = req.user.id;
+    const events = await Event.findAll({ where: { organizer_id: organizerId }, attributes: ['id', 'title', 'date'] });
+    const eventIds = events.map((e) => e.id);
+    const counts = await seatCountsByEvent(eventIds);
 
-    for (const event of events) {
-      const seats = await Seat.findAll({ where: { event_id: event.id }, include: [{ model: SeatCategory, as: 'category' }] });
-      const totalSeats = seats.length;
-      const bookedSeats = seats.filter(s => s.status === 'booked').length;
-      const heldSeats = seats.filter(s => s.status === 'held').length;
-      const freeSeats = seats.filter(s => s.status === 'free').length;
-      
-      const revenue = seats.filter(s => s.status === 'booked').reduce((sum, s) => sum + Number(s.category.price), 0);
-      
-      totalBookings += bookedSeats;
-      totalRevenue += revenue;
-      
-      breakdown.push({
-        eventId: event.id,
-        title: event.title,
-        totalSeats,
-        bookedSeats,
-        heldSeats,
-        freeSeats,
-        revenue
-      });
-    }
-
-    const eventIds = events.map(e => e.id);
-
-    // Active holds right now, across all of this organizer's events (joined via Seat, since
-    // Hold has no event_id column of its own — see MODEL_NOTES.md).
+    let totals = { revenue: 0, bookings: 0 };
     let activeHolds = 0;
     let activeHoldEvents = 0;
-    if (eventIds.length) {
-      const activeHoldRows = await Hold.findAll({
-        where: { expires_at: { [Op.gt]: new Date() } },
-        include: [{ model: Seat, as: 'seat', where: { event_id: { [Op.in]: eventIds } }, attributes: ['event_id'] }]
-      });
-      activeHolds = activeHoldRows.length;
-      activeHoldEvents = new Set(activeHoldRows.map(h => h.seat.event_id)).size;
-    }
-
-    // Latest confirmed bookings feed, newest first.
     let recentBookings = [];
+
     if (eventIds.length) {
-      const bookings = await Booking.findAll({
-        where: { event_id: { [Op.in]: eventIds }, status: 'CONFIRMED' },
-        order: [['created_at', 'DESC']],
-        limit: 8
-      });
-      const bookingIds = bookings.map(b => b.id);
-      const seatCountByBooking = {};
-      if (bookingIds.length) {
-        const bookedSeats = await Seat.findAll({ where: { booking_id: { [Op.in]: bookingIds } }, attributes: ['booking_id'] });
-        bookedSeats.forEach(s => {
-          seatCountByBooking[s.booking_id] = (seatCountByBooking[s.booking_id] || 0) + 1;
-        });
-      }
-      const titleByEventId = {};
-      events.forEach(e => { titleByEventId[e.id] = e.title; });
-      recentBookings = bookings.map(b => ({
-        bookingId: b.id,
-        eventTitle: titleByEventId[b.event_id],
-        seats: seatCountByBooking[b.id] || 0,
-        amount: Number(b.total_amount),
-        createdAt: b.createdAt
+      const [t] = await sequelize.query(
+        `SELECT COALESCE(SUM(total_amount), 0) AS revenue, COUNT(*)::int AS bookings
+           FROM bookings WHERE event_id IN (:eventIds) AND status = 'CONFIRMED'`,
+        { replacements: { eventIds }, type: QueryTypes.SELECT }
+      );
+      totals = { revenue: Number(t.revenue), bookings: t.bookings };
+
+      const [h] = await sequelize.query(
+        `SELECT COUNT(*)::int AS seats, COUNT(DISTINCT s.event_id)::int AS events
+           FROM holds h JOIN seats s ON s.id = h.seat_id
+          WHERE s.event_id IN (:eventIds) AND h.expires_at > now()`,
+        { replacements: { eventIds }, type: QueryTypes.SELECT }
+      );
+      activeHolds = h.seats;
+      activeHoldEvents = h.events;
+
+      const rows = await sequelize.query(
+        `SELECT b.id, b.event_id, b.total_amount, b.created_at, e.title,
+                (SELECT COUNT(*) FROM seats s WHERE s.booking_id = b.id)::int AS seats
+           FROM bookings b JOIN events e ON e.id = b.event_id
+          WHERE b.event_id IN (:eventIds) AND b.status = 'CONFIRMED'
+          ORDER BY b.created_at DESC LIMIT 8`,
+        { replacements: { eventIds }, type: QueryTypes.SELECT }
+      );
+      recentBookings = rows.map((b) => ({
+        bookingId: b.id, bookingCode: bookingCode(b.id), eventTitle: b.title, seats: b.seats,
+        amount: Number(b.total_amount), createdAt: b.created_at,
       }));
     }
 
-    res.status(200).json({
-      totalEvents,
-      totalBookings,
-      totalRevenue,
+    const seatTotals = Object.values(counts).reduce((a, c) => ({ booked: a.booked + c.bookedSeats }), { booked: 0 });
+
+    res.json({
+      totalEvents: events.length,
+      totalBookings: seatTotals.booked, // seats sold (the KPI card's label says "confirmed seats booked")
+      bookingCount: totals.bookings,
+      totalRevenue: totals.revenue,
       activeHolds,
       activeHoldEvents,
-      breakdown,
-      recentBookings
+      breakdown: events.map((e) => ({ eventId: e.id, title: e.title, ...(counts[e.id] || {}) })),
+      recentBookings,
     });
-  } catch (error) {
-    next(error);
+  } catch (err) {
+    next(err);
   }
 };
 
 exports.getAnalytics = async (req, res, next) => {
   try {
-    const { eventId } = req.query;
-    const scope = !eventId || eventId === 'all' ? 'all' : 'single';
-
+    const raw = req.query.eventId;
+    const scope = !raw || raw === 'all' ? 'all' : 'single';
     const eventWhere = { organizer_id: req.user.id };
-    if (scope === 'single') eventWhere.id = eventId;
+    if (scope === 'single') eventWhere.id = v.id(raw, 'eventId');
 
     const events = await Event.findAll({
       where: eventWhere,
-      include: [{ model: SeatCategory, as: 'categories' }]
+      include: [{ model: SeatCategory, as: 'categories' }],
+      order: [['date', 'ASC'], [{ model: SeatCategory, as: 'categories' }, 'id', 'ASC']],
     });
+    if (scope === 'single' && !events.length) throw new AppError('Event not found', 404, 'EVENT_NOT_FOUND');
 
-    if (scope === 'single' && events.length === 0) {
-      return next(new AppError('Event not found or not owned', 404));
+    const eventIds = events.map((e) => e.id);
+    const titleById = Object.fromEntries(events.map((e) => [e.id, e.title]));
+    const empty = { revenue: 0, seatsSold: 0, totalCapacity: 0, occupancyPct: 0, totalBookings: 0 };
+    if (!eventIds.length) {
+      return res.json({ scope, eventName: null, stats: empty, daily: [], occupancy: [], categoryMix: [], bookings: [] });
     }
 
-    const eventIds = events.map(e => e.id);
-    const titleByEventId = {};
-    events.forEach(e => { titleByEventId[e.id] = e.title; });
+    const perCategory = await sequelize.query(
+      `SELECT s.event_id, s.category_id, COUNT(*)::int AS cap,
+              COUNT(*) FILTER (WHERE s.status = 'booked')::int AS sold
+         FROM seats s WHERE s.event_id IN (:eventIds)
+        GROUP BY s.event_id, s.category_id`,
+      { replacements: { eventIds }, type: QueryTypes.SELECT }
+    );
+    const bookings = await sequelize.query(
+      `SELECT b.id, b.event_id, b.total_amount, b.created_at,
+              to_char(b.created_at AT TIME ZONE '${APP_TZ}', 'YYYY-MM-DD') AS day,
+              COUNT(s.id)::int AS seats,
+              COALESCE(STRING_AGG(DISTINCT c.name, ', '), '') AS categories
+         FROM bookings b
+         LEFT JOIN seats s ON s.booking_id = b.id
+         LEFT JOIN seat_categories c ON c.id = s.category_id
+        WHERE b.event_id IN (:eventIds) AND b.status = 'CONFIRMED'
+        GROUP BY b.id
+        ORDER BY b.created_at DESC`,
+      { replacements: { eventIds }, type: QueryTypes.SELECT }
+    );
+    const mix = await sequelize.query(
+      `SELECT c.name, COUNT(*)::int AS seats, SUM(c.price) AS revenue
+         FROM seats s JOIN seat_categories c ON c.id = s.category_id
+        WHERE s.event_id IN (:eventIds) AND s.status = 'booked'
+        GROUP BY c.name ORDER BY MIN(c.id)`,
+      { replacements: { eventIds }, type: QueryTypes.SELECT }
+    );
 
-    const seats = eventIds.length
-      ? await Seat.findAll({ where: { event_id: { [Op.in]: eventIds } }, include: [{ model: SeatCategory, as: 'category' }] })
-      : [];
+    const totalCapacity = perCategory.reduce((a, r) => a + r.cap, 0);
+    const totalSold = perCategory.reduce((a, r) => a + r.sold, 0);
+    const totalRevenue = bookings.reduce((a, b) => a + Number(b.total_amount), 0);
 
-    const bookings = eventIds.length
-      ? await Booking.findAll({
-          where: { event_id: { [Op.in]: eventIds }, status: 'CONFIRMED' },
-          order: [['created_at', 'DESC']]
-        })
-      : [];
-
-    const bookingIds = bookings.map(b => b.id);
-    const bookedSeats = bookingIds.length
-      ? await Seat.findAll({ where: { booking_id: { [Op.in]: bookingIds } }, include: [{ model: SeatCategory, as: 'category' }] })
-      : [];
-
-    const seatsByBooking = {};
-    bookedSeats.forEach(s => {
-      if (!seatsByBooking[s.booking_id]) seatsByBooking[s.booking_id] = [];
-      seatsByBooking[s.booking_id].push(s);
-    });
-
-    const totalCapacity = seats.length;
-    const totalSold = seats.filter(s => s.status === 'booked').length;
-    const totalRevenue = bookings.reduce((sum, b) => sum + Number(b.total_amount), 0);
-
-    // Last 21 days, confirmed bookings bucketed by the day they were confirmed.
+    // Last 21 days in India time, oldest first.
     const DAYS = 21;
-    const dayKeys = [];
+    const fmtDay = new Intl.DateTimeFormat('en-CA', { timeZone: APP_TZ, year: 'numeric', month: '2-digit', day: '2-digit' });
     const dayMap = {};
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const daily = [];
     for (let i = DAYS - 1; i >= 0; i--) {
-      const d = new Date(today.getTime() - i * 86400000);
-      const key = d.toISOString().slice(0, 10);
-      dayKeys.push(key);
+      const key = fmtDay.format(new Date(Date.now() - i * 86400000));
       dayMap[key] = { date: key, revenue: 0, seats: 0, bookings: 0 };
+      daily.push(dayMap[key]);
     }
-    bookings.forEach(b => {
-      const key = new Date(b.createdAt).toISOString().slice(0, 10);
-      if (dayMap[key]) {
-        dayMap[key].revenue += Number(b.total_amount);
-        dayMap[key].seats += (seatsByBooking[b.id] || []).length;
-        dayMap[key].bookings += 1;
-      }
+    bookings.forEach((b) => {
+      const d = dayMap[b.day];
+      if (d) { d.revenue += Number(b.total_amount); d.seats += b.seats; d.bookings += 1; }
     });
-    const daily = dayKeys.map(k => dayMap[k]);
 
-    // Occupancy: per event when viewing all events, per seat category when viewing one.
+    const pct = (sold, cap) => (cap ? Math.round((sold / cap) * 100) : 0);
     let occupancy;
     if (scope === 'all') {
-      occupancy = events.map(e => {
-        const eventSeats = seats.filter(s => s.event_id === e.id);
-        const cap = eventSeats.length;
-        const sold = eventSeats.filter(s => s.status === 'booked').length;
-        return { name: e.title, sold, cap, pct: cap ? Math.round((sold / cap) * 100) : 0 };
+      occupancy = events.map((e) => {
+        const rows = perCategory.filter((r) => r.event_id === e.id);
+        const cap = rows.reduce((a, r) => a + r.cap, 0);
+        const sold = rows.reduce((a, r) => a + r.sold, 0);
+        return { name: e.title, sold, cap, pct: pct(sold, cap) };
       });
     } else {
-      const cats = events[0].categories || [];
-      occupancy = cats.map(c => {
-        const catSeats = seats.filter(s => s.category_id === c.id);
-        const cap = catSeats.length;
-        const sold = catSeats.filter(s => s.status === 'booked').length;
-        return { name: c.name, sold, cap, pct: cap ? Math.round((sold / cap) * 100) : 0 };
+      occupancy = events[0].categories.map((c) => {
+        const r = perCategory.find((x) => x.category_id === c.id) || { cap: 0, sold: 0 };
+        return { name: c.name, sold: r.sold, cap: r.cap, pct: pct(r.sold, r.cap) };
       });
     }
 
-    // Category revenue/seat mix across the scoped bookings.
-    const catTotals = {};
-    bookedSeats.forEach(s => {
-      const name = s.category ? s.category.name : 'Unknown';
-      if (!catTotals[name]) catTotals[name] = { name, seats: 0, revenue: 0 };
-      catTotals[name].seats += 1;
-      catTotals[name].revenue += Number(s.category ? s.category.price : 0);
-    });
-    const categoryMix = Object.values(catTotals);
-
-    const rows = bookings.map(b => {
-      const bSeats = seatsByBooking[b.id] || [];
-      const categoryNames = [...new Set(bSeats.map(s => (s.category ? s.category.name : '')))].filter(Boolean);
-      return {
-        id: 'BK-' + String(b.id).padStart(6, '0'),
-        eventName: titleByEventId[b.event_id],
-        category: categoryNames.join(', '),
-        seats: bSeats.length,
-        amount: Number(b.total_amount),
-        status: 'CONFIRMED',
-        createdAt: b.createdAt
-      };
-    });
-
-    res.status(200).json({
+    res.json({
       scope,
       eventName: scope === 'single' ? events[0].title : null,
       stats: {
         revenue: totalRevenue,
         seatsSold: totalSold,
         totalCapacity,
-        occupancyPct: totalCapacity ? Math.round((totalSold / totalCapacity) * 100) : 0,
-        totalBookings: bookings.length
+        occupancyPct: pct(totalSold, totalCapacity),
+        totalBookings: bookings.length,
       },
       daily,
       occupancy,
-      categoryMix,
-      bookings: rows
+      categoryMix: mix.map((m) => ({ name: m.name, seats: m.seats, revenue: Number(m.revenue) })),
+      bookings: bookings.map((b) => ({
+        id: bookingCode(b.id),
+        eventName: titleById[b.event_id],
+        category: b.categories,
+        seats: b.seats,
+        amount: Number(b.total_amount),
+        status: 'CONFIRMED',
+        createdAt: b.created_at,
+      })),
     });
-  } catch (error) {
-    next(error);
+  } catch (err) {
+    next(err);
   }
 };

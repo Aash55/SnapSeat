@@ -1,22 +1,17 @@
 const { Sequelize } = require('sequelize');
-require('dotenv').config();
+const { db, isTest } = require('./index');
 
-const sequelize = new Sequelize(
-  process.env.DB_NAME || 'snapseat',
-  process.env.DB_USER || 'postgres',
-  process.env.DB_PASSWORD || 'postgres123',
-  {
-    host: process.env.DB_HOST || 'localhost',
-    port: process.env.DB_PORT || 5432,
-    dialect: 'postgres',
-    logging: false,
-    pool: {
-      max: 20,
-      min: 5,
-      acquire: 30000,
-      idle: 10000,
-    },
-  }
-);
+const common = {
+  dialect: 'postgres',
+  logging: false,
+  // Keep timestamps in UTC end to end; the client formats for the viewer's timezone.
+  timezone: '+00:00',
+  pool: { max: isTest ? 10 : 20, min: 0, acquire: 30000, idle: 10000 },
+  dialectOptions: db.ssl ? { ssl: { require: true, rejectUnauthorized: false } } : {},
+};
+
+const sequelize = db.url
+  ? new Sequelize(db.url, common)
+  : new Sequelize(db.database, db.username, db.password, { ...common, host: db.host, port: db.port });
 
 module.exports = sequelize;

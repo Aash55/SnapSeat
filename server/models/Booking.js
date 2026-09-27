@@ -47,6 +47,7 @@ const Booking = sequelize.define('Booking', {
       fields: ['event_id'],
     },
     {
+      unique: true,
       fields: ['hold_group_id'],
     },
   ],

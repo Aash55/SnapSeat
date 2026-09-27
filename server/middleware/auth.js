@@ -1,18 +1,17 @@
 const jwt = require('jsonwebtoken');
+const { jwtSecret } = require('../config');
 
 const authMiddleware = (req, res, next) => {
+  const header = req.headers.authorization || '';
+  if (!header.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Please log in to continue', code: 'UNAUTHORIZED' });
+  }
   try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'Authentication required', code: 'UNAUTHORIZED' });
-    }
-
-    const token = authHeader.split(' ')[1];
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = decoded;
+    const decoded = jwt.verify(header.slice(7), jwtSecret);
+    req.user = { id: decoded.id, email: decoded.email, role: decoded.role };
     next();
-  } catch (error) {
-    return res.status(401).json({ error: 'Invalid or expired token', code: 'UNAUTHORIZED' });
+  } catch {
+    return res.status(401).json({ error: 'Your session has expired. Please log in again.', code: 'SESSION_EXPIRED' });
   }
 };
 

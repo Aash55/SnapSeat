@@ -1,118 +1,59 @@
 'use strict';
 
+// Demo events with dates relative to "now", so the seed never goes stale.
+// Each category becomes one lettered row block; the seat map lays seats out 16 to a row.
+const DAY = 86400000;
+const at = (days, hour, minute) => {
+  const d = new Date(Date.now() + days * DAY);
+  d.setUTCHours(hour - 5, minute - 30, 0, 0); // hour:minute in India time (UTC+5:30)
+  return d;
+};
+
+const EVENTS = [
+  { title: 'Midnight Jazz Sessions', category: 'Concert', city: 'Mumbai', venue: 'The Blue Room, Riverside Arena', date: at(7, 21, 0),
+    description: 'Late-night jazz with a live trio.', cats: [['VIP', 1500, 16], ['Gold', 900, 32], ['Standard', 600, 48]] },
+  { title: 'Hostel Diaries: A Stand-up Hour', category: 'Comedy', city: 'Delhi', venue: 'Studio Black Box, Sector 4', date: at(12, 20, 0),
+    description: 'An hour of new stand-up material.', cats: [['Front Row', 800, 16], ['Standard', 400, 48]] },
+  { title: 'Symphony Under the Stars', category: 'Concert', city: 'Pune', venue: 'Open Lawn, Heritage Grounds', date: at(14, 18, 45),
+    description: 'An open-air evening with the city orchestra.', cats: [['VIP', 1500, 32], ['Standard', 600, 64]] },
+  { title: 'Grandmasters Live: Blitz Showdown', category: 'Sports', city: 'Chennai', venue: 'Convention Hall B, City Centre', date: at(21, 17, 0),
+    description: 'Eight grandmasters, three-minute games, live commentary.', cats: [['Ringside', 1200, 16], ['Gallery', 500, 48]] },
+  { title: 'The Last Monsoon — Stage Premiere', category: 'Theatre', city: 'Bengaluru', venue: 'Ranga Shankara Main Stage', date: at(28, 19, 30),
+    description: 'Premiere night of a new two-act play.', cats: [['Stalls', 1000, 32], ['Balcony', 450, 32]] },
+];
+
 /** @type {import('sequelize-cli').Migration} */
 module.exports = {
-  async up(queryInterface, Sequelize) {
-    // Get the organizer user id
-    const [users] = await queryInterface.sequelize.query(
+  async up(queryInterface) {
+    const [[organizer]] = await queryInterface.sequelize.query(
       `SELECT id FROM users WHERE email = 'organizer@snapseat.com' LIMIT 1;`
     );
-    const organizerId = users[0].id;
+    const now = new Date();
+    const letters = 'ABCDEFGHIJ';
 
-    // Insert 3 events
-    await queryInterface.bulkInsert('events', [
-      {
-        organizer_id: organizerId,
-        title: 'Rock Concert 2026',
-        category: 'Concert',
-        city: 'Mumbai',
-        venue: 'Wankhede Stadium',
-        date: new Date('2026-12-25T19:00:00.000Z'),
-        description: 'Year-end rock show featuring top bands. An unforgettable night of music!',
-        created_at: new Date(),
-        updated_at: new Date(),
-      },
-      {
-        organizer_id: organizerId,
-        title: 'Stand-Up Night',
-        category: 'Comedy',
-        city: 'Delhi',
-        venue: 'Siri Fort Auditorium',
-        date: new Date('2026-11-15T18:30:00.000Z'),
-        description: 'A hilarious evening of stand-up comedy with top comedians.',
-        created_at: new Date(),
-        updated_at: new Date(),
-      },
-      {
-        organizer_id: organizerId,
-        title: 'IPL Final 2027',
-        category: 'Sports',
-        city: 'Ahmedabad',
-        venue: 'Narendra Modi Stadium',
-        date: new Date('2027-05-28T19:30:00.000Z'),
-        description: 'The grand finale of IPL 2027. Witness cricket history!',
-        created_at: new Date(),
-        updated_at: new Date(),
-      },
-    ]);
-
-    // Get event IDs
-    const [events] = await queryInterface.sequelize.query(
-      `SELECT id, title FROM events ORDER BY id;`
-    );
-
-    // Seat categories for each event
-    const categories = [];
-    for (const event of events) {
-      categories.push(
-        {
-          event_id: event.id,
-          name: 'VIP',
-          price: 100.00,
-          created_at: new Date(),
-          updated_at: new Date(),
-        },
-        {
-          event_id: event.id,
-          name: 'Gold',
-          price: 60.00,
-          created_at: new Date(),
-          updated_at: new Date(),
-        },
-        {
-          event_id: event.id,
-          name: 'Silver',
-          price: 30.00,
-          created_at: new Date(),
-          updated_at: new Date(),
-        }
+    for (const ev of EVENTS) {
+      const [[event]] = await queryInterface.sequelize.query(
+        `INSERT INTO events (organizer_id, title, category, city, venue, date, description, created_at, updated_at)
+         VALUES (:org, :title, :category, :city, :venue, :date, :description, :now, :now) RETURNING id`,
+        { replacements: { org: organizer.id, ...ev, now } }
       );
-    }
-
-    await queryInterface.bulkInsert('seat_categories', categories);
-
-    // Get all category IDs grouped by event
-    const [allCategories] = await queryInterface.sequelize.query(
-      `SELECT id, event_id, name FROM seat_categories ORDER BY event_id, id;`
-    );
-
-    // Generate seats for each category
-    const seats = [];
-    const categoryLetters = { VIP: 'A', Gold: 'B', Silver: 'C' };
-    const categoryCounts = { VIP: 10, Gold: 20, Silver: 20 };
-
-    for (const cat of allCategories) {
-      const letter = categoryLetters[cat.name];
-      const count = categoryCounts[cat.name];
-
-      for (let i = 1; i <= count; i++) {
-        seats.push({
-          event_id: cat.event_id,
-          category_id: cat.id,
-          seat_number: `${letter}${i}`,
-          status: 'free',
-          created_at: new Date(),
-          updated_at: new Date(),
-        });
+      for (let i = 0; i < ev.cats.length; i++) {
+        const [name, price, count] = ev.cats[i];
+        const [[cat]] = await queryInterface.sequelize.query(
+          `INSERT INTO seat_categories (event_id, name, price, created_at, updated_at)
+           VALUES (:eventId, :name, :price, :now, :now) RETURNING id`,
+          { replacements: { eventId: event.id, name, price, now } }
+        );
+        const seats = [];
+        for (let n = 1; n <= count; n++) {
+          seats.push({ event_id: event.id, category_id: cat.id, seat_number: `${letters[i]}${n}`, status: 'free', created_at: now, updated_at: now });
+        }
+        await queryInterface.bulkInsert('seats', seats);
       }
     }
-
-    await queryInterface.bulkInsert('seats', seats);
   },
 
-  async down(queryInterface, Sequelize) {
-    await queryInterface.bulkDelete('seats', null, {});
-    await queryInterface.bulkDelete('seat_categories', null, {});
-    await queryInterface.bulkDelete('events', null, {});
+  async down(queryInterface) {
+    await queryInterface.bulkDelete('events', { title: EVENTS.map((e) => e.title) }, {});
   },
 };
