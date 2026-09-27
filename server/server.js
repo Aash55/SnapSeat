@@ -14,12 +14,15 @@ async function start() {
 
   const worker = config.runExpiryWorker ? startExpiryWorker() : null;
 
-  const server = app.listen(config.port, () => {
+  // Express 5 passes listen errors (e.g. EADDRINUSE) to this callback instead of throwing.
+  const server = app.listen(config.port, (err) => {
+    if (err) {
+      console.error(err.code === 'EADDRINUSE'
+        ? `Port ${config.port} is already in use. Stop the other server (see README) or set PORT in .env.`
+        : err.message);
+      process.exit(1);
+    }
     console.log(`SnapSeat API listening on port ${config.port} (${config.env})`);
-  });
-  server.on('error', (err) => {
-    console.error(err.code === 'EADDRINUSE' ? `Port ${config.port} is already in use.` : err.message);
-    process.exit(1);
   });
 
   const shutdown = async (signal) => {
