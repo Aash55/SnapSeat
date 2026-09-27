@@ -1,28 +1,17 @@
 import { Navigate } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext';
+import { useAuth } from '../context/authContext';
 
-const Spinner = () => (
-  <div className="min-h-screen bg-dark-bg flex items-center justify-center">
-    <div className="w-8 h-8 border-2 border-gold border-t-transparent rounded-full animate-spin" />
-  </div>
-);
-
+// Customer pages: attendees only. An organizer who lands here goes to their console.
 export const ProtectedRoute = ({ children }) => {
-  const { isAuthenticated, loading } = useAuth();
-
-  if (loading) return <Spinner />;
+  const { isAuthenticated, isOrganizer } = useAuth();
   if (!isAuthenticated) return <Navigate to="/login" replace />;
-
+  if (isOrganizer) return <Navigate to="/organizer/dashboard" replace />;
   return children;
 };
 
-// Same as ProtectedRoute, but also requires the organizer role — an attendee hitting an
-// /organizer/* URL gets bounced to the organizer login instead of seeing someone else's console.
+// Organizer pages: organizers only. Anyone else gets the organizer login.
 export const OrganizerRoute = ({ children }) => {
-  const { isAuthenticated, isOrganizer, loading } = useAuth();
-
-  if (loading) return <Spinner />;
+  const { isAuthenticated, isOrganizer } = useAuth();
   if (!isAuthenticated || !isOrganizer) return <Navigate to="/organizer/login" replace />;
-
   return children;
 };

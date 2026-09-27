@@ -1,8 +1,10 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { OrganizerNavbar } from '../../components/organizer/OrganizerNavbar';
 import { organizerApi } from '../../services/organizerApi';
-import { useToast } from '../../components/Toast';
+import { useToast } from '../../components/toastContext';
+import { errorMessage } from '../../services/api';
+import { useNow } from '../../hooks/useNow';
 
 const MON = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
 const DOW = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
@@ -15,9 +17,8 @@ const time12 = (d) => {
   return `${h}:${m} ${ap}`;
 };
 
-function EventRow({ ev, onAskDelete }) {
+function EventRow({ ev, onAskDelete, now }) {
   const d = new Date(ev.date);
-  const now = Date.now();
   const isPast = d.getTime() <= now;
   const days = Math.ceil((d.getTime() - now) / 86400000);
 
@@ -125,21 +126,19 @@ export default function OrgMyEventsPage() {
   const [deleting, setDeleting] = useState(false);
   const toast = useToast();
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await organizerApi.listEvents();
-      setEvents(res.data);
-    } catch {
-      toast.error('Could not load your events.');
-    } finally {
-      setLoading(false);
-    }
-  }, [toast]);
+  const [reloadKey, setReloadKey] = useState(0);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    let alive = true;
+    organizerApi.listEvents()
+      .then((res) => { if (alive) setEvents(res.data); })
+      .catch((err) => { if (alive) toast.error(errorMessage(err, 'Could not load your events.')); })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [toast, reloadKey]);
+  const load = () => setReloadKey((k) => k + 1);
 
-  const now = Date.now();
+  const now = useNow();
   const upcoming = events.filter((e) => new Date(e.date).getTime() > now).sort((a, b) => new Date(a.date) - new Date(b.date));
   const past = events.filter((e) => new Date(e.date).getTime() <= now).sort((a, b) => new Date(b.date) - new Date(a.date));
   const isEmpty = !loading && events.length === 0;
@@ -154,7 +153,7 @@ export default function OrgMyEventsPage() {
       setModalEvent(null);
       load();
     } catch (err) {
-      toast.error(err.response?.data?.error || 'Could not delete this event.');
+      toast.error(errorMessage(err, 'Could not delete this event.'));
     } finally {
       setDeleting(false);
     }
@@ -230,21 +229,21 @@ export default function OrgMyEventsPage() {
                   UPCOMING &middot; {upcoming.length}
                 </div>
               )}
-              {upcoming.map((ev) => <EventRow key={ev.id} ev={ev} onAskDelete={setModalEvent} />)}
+              {upcoming.map((ev) => <EventRow key={ev.id} ev={ev} onAskDelete={setModalEvent} now={now} />)}
               {past.length > 0 && (
                 <div className="px-6 py-3 bg-[#121017] border-b border-dark-border border-t border-dark-border font-label text-[11px] tracking-widest text-gray-text">
                   PAST &middot; {past.length}
                 </div>
               )}
-              {past.map((ev) => <EventRow key={ev.id} ev={ev} onAskDelete={setModalEvent} />)}
+              {past.map((ev) => <EventRow key={ev.id} ev={ev} onAskDelete={setModalEvent} now={now} />)}
             </div>
 
             {/* Mobile cards */}
             <div className="md:hidden flex flex-col gap-3">
               {upcoming.length > 0 && <span className="font-label text-[11px] tracking-widest text-gray-text pt-2">UPCOMING &middot; {upcoming.length}</span>}
-              {upcoming.map((ev) => <EventRow key={ev.id} ev={ev} onAskDelete={setModalEvent} />)}
+              {upcoming.map((ev) => <EventRow key={ev.id} ev={ev} onAskDelete={setModalEvent} now={now} />)}
               {past.length > 0 && <span className="font-label text-[11px] tracking-widest text-gray-text pt-2">PAST &middot; {past.length}</span>}
-              {past.map((ev) => <EventRow key={ev.id} ev={ev} onAskDelete={setModalEvent} />)}
+              {past.map((ev) => <EventRow key={ev.id} ev={ev} onAskDelete={setModalEvent} now={now} />)}
             </div>
           </>
         )}

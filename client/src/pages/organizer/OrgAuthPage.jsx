@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { useAuth } from '../../context/AuthContext';
+import { useAuth, readSessionExpired, clearSessionExpired } from '../../context/authContext';
+import { errorMessage } from '../../services/api';
 
 export default function OrgAuthPage() {
   const [mode, setMode] = useState('login'); // 'login' | 'signup'
@@ -14,9 +15,11 @@ export default function OrgAuthPage() {
 
   const { user, isOrganizer, login, registerOrganizer } = useAuth();
   const navigate = useNavigate();
+  const [sessionExpired] = useState(readSessionExpired);
+  useEffect(() => { clearSessionExpired(); }, []);
 
   useEffect(() => {
-    if (user && isOrganizer) navigate('/organizer/events');
+    if (user && isOrganizer) navigate('/organizer/dashboard', { replace: true });
   }, [user, isOrganizer, navigate]);
 
   const isSignup = mode === 'signup';
@@ -55,17 +58,20 @@ export default function OrgAuthPage() {
       if (isSignup) {
         await registerOrganizer(org.trim(), email.trim(), password, confirm);
       } else {
-        await login(email.trim(), password);
+        await login(email.trim(), password, { expectedRole: 'organizer' });
       }
-      navigate('/organizer/events');
+      navigate('/organizer/dashboard');
     } catch (err) {
-      const msg = err.response?.data?.error || 'Something went wrong. Try again.';
-      if (isSignup && err.response?.data?.code === 'EMAIL_EXISTS') {
-        setErrors({ email: msg });
-      } else if (!isSignup) {
-        setErrors({ cred: true, password: msg });
+      const code = err.code === 'ROLE_MISMATCH' ? 'ROLE_MISMATCH' : err.response?.data?.code;
+      const msg = code === 'ROLE_MISMATCH' ? err.message : errorMessage(err);
+      const field = err.response?.data?.field;
+      if (isSignup) {
+        const map = { orgName: 'org', email: 'email', password: 'password', confirmPassword: 'confirm' };
+        setErrors({ [map[field] || (code === 'EMAIL_EXISTS' ? 'email' : 'form')]: msg });
+      } else if (code === 'INVALID_CREDENTIALS') {
+        setErrors({ cred: true, password: 'Incorrect email or password.' });
       } else {
-        setErrors({ email: msg });
+        setErrors({ form: msg });
       }
     } finally {
       setLoading(false);
@@ -92,6 +98,11 @@ export default function OrgAuthPage() {
 
       <main className="flex-1 flex flex-col items-center justify-center px-4 md:px-16 py-8">
         <div className="w-full max-w-[460px] bg-dark-card border border-dark-border rounded-2xl p-6 md:p-10 flex flex-col gap-6 overflow-hidden">
+          {sessionExpired && (
+            <p role="status" className="m-0 px-3.5 py-3 rounded-[10px] bg-dark-card-hover border border-dark-border-hover text-[13px] text-gray-light">
+              Your session expired. Log in again to continue.
+            </p>
+          )}
           <div className="flex flex-col gap-2">
             <span className="font-label text-xs tracking-widest text-gold">
               {isSignup ? 'NEW ORGANIZER' : 'ORGANIZER CONSOLE'}
@@ -192,6 +203,10 @@ export default function OrgAuthPage() {
                 />
                 {errors.confirm && <p className="fade text-danger text-[13px] m-0">{errors.confirm}</p>}
               </div>
+            )}
+
+            {errors.form && (
+              <p role="alert" className="fade m-0 px-3.5 py-3 rounded-[10px] bg-danger/10 border border-danger/35 text-[13px] leading-snug text-gray-light">{errors.form}</p>
             )}
 
             <div className="perf my-2 -mx-6 md:-mx-10" />

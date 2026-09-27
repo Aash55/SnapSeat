@@ -141,3 +141,82 @@ button:focus-visible, a:focus-visible {
 ::-webkit-scrollbar-thumb:hover {
   background: #555;
 }
+
+.toast-drop { animation: toast-drop .38s cubic-bezier(.2,.8,.2,1); }
+@keyframes toast-drop { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: none; } }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}
+
+/* ── Customer flow components (from the SnapSeat design boards) ───────────────────────── */
+@layer components {
+  .btn-gold {
+    background: #F5B544; color: #1A1206; border: 0; cursor: pointer;
+    transition: transform .15s, background .2s, box-shadow .2s;
+  }
+  .btn-gold:not(:disabled):hover { background: #FFC65C; color: #1A1206; box-shadow: 0 8px 24px -8px rgba(245,181,68,.6); }
+  .btn-gold:not(:disabled):active { transform: scale(.97); }
+  .btn-gold:disabled { background: #26222F; color: #6B6478; cursor: not-allowed; }
+  .btn-gold.is-busy:disabled { background: #B8883A; color: #1A1206; cursor: progress; }
+  .btn-ghost {
+    background: transparent; border: 1px solid #2C2838; color: #F4F1EA; cursor: pointer;
+    transition: background .2s, border-color .2s, opacity .2s;
+  }
+  .btn-ghost:not(:disabled):hover { background: #1C1924; border-color: #3A3448; color: #F4F1EA; }
+  .btn-ghost:disabled { opacity: .4; cursor: not-allowed; }
+
+  .ev-card {
+    background: #16141D; border: 1px solid #26222F;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.04), 0 1px 2px rgba(0,0,0,.4), 0 12px 28px -16px rgba(0,0,0,.7);
+    transition: transform .28s cubic-bezier(.2,.8,.2,1), box-shadow .28s, border-color .28s;
+  }
+  .ev-card:hover {
+    transform: translateY(-4px); border-color: #3A3448;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 0 0 1px rgba(245,181,68,.22), 0 24px 48px -20px rgba(0,0,0,.9);
+  }
+  .panel-card { background: #16141D; border: 1px solid #26222F; box-shadow: inset 0 1px 0 rgba(255,255,255,.04), 0 24px 48px -24px rgba(0,0,0,.9); }
+
+  .seat {
+    border: 1.5px solid #5A5468; background: transparent; color: #B4AEC0; cursor: pointer; padding: 0;
+    border-radius: 9px 9px 4px 4px; font-family: 'IBM Plex Mono', monospace; font-size: 11px;
+    display: flex; align-items: center; justify-content: center; box-sizing: border-box;
+    transition: transform .15s, background .15s, border-color .15s, opacity .2s;
+  }
+  .s-free:not(:disabled):hover { border-color: #F5B544; color: #F4F1EA; transform: translateY(-2px); }
+  .s-sel { background: #F5B544; border-color: #F5B544; color: #1A1206; }
+  .s-sel:hover { background: #FFC65C; border-color: #FFC65C; }
+  .s-mine { background: #F5B544; border-color: #F5B544; color: #1A1206; box-shadow: 0 0 0 2px #0B0A0F, 0 0 0 4px rgba(245,181,68,.5); cursor: default; }
+  .s-held { border: 1.5px dashed #7A7388; color: #9A94A8; cursor: not-allowed; background: repeating-linear-gradient(135deg, transparent 0 4px, rgba(143,137,160,.22) 4px 6px); }
+  .s-booked { background: #1E1B26; border-color: #1E1B26; color: #5A5468; cursor: not-allowed; }
+  .s-maxed { opacity: .32; cursor: not-allowed; }
+  .s-maxed:hover { transform: none; }
+  .seat-pop { animation: seat-pop .34s cubic-bezier(.3,1.6,.5,1); }
+  @keyframes seat-pop { 0% { transform: scale(.78); } 60% { transform: scale(1.16); } 100% { transform: scale(1); } }
+  .seat-flash { animation: seat-flash 1.4s ease-out; }
+  @keyframes seat-flash { 0% { box-shadow: 0 0 0 0 rgba(245,181,68,.85); } 100% { box-shadow: 0 0 0 12px rgba(245,181,68,0); } }
+
+  .pip { transition: background .25s, transform .25s; }
+  .pip-on { background: #F5B544; transform: scaleY(1.15); }
+  .pip-off { background: #2C2838; }
+
+  .ring-progress { transition: stroke-dashoffset 1s linear, stroke .4s; }
+  .pulse-soft { animation: pulse-soft 1s ease-in-out infinite; }
+  @keyframes pulse-soft { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
+
+  .tear { position: relative; height: 0; border-top: 2px dashed #3A3448; }
+  .tear::before, .tear::after {
+    content: ''; position: absolute; top: -15px; width: 28px; height: 28px; border-radius: 50%;
+    background: #0B0A0F; border: 1px solid #26222F; box-sizing: border-box;
+  }
+  .tear::before { left: -15px; } .tear::after { right: -15px; }
+  .rise { animation: rise .5s .1s cubic-bezier(.2,.8,.2,1) both; }
+  @keyframes rise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+  .pop-in { animation: pop-in .5s cubic-bezier(.3,1.5,.5,1); }
+  @keyframes pop-in { 0% { transform: scale(.6); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
+  .float-y { animation: float-y 4s ease-in-out infinite; }
+  @keyframes float-y { 0%, 100% { transform: translateY(0) rotate(-6deg); } 50% { transform: translateY(-8px) rotate(-4deg); } }
+
+  .hscroll { overflow-x: auto; scrollbar-width: none; }
+  .hscroll::-webkit-scrollbar { display: none; }
+}

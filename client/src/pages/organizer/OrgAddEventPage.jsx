@@ -1,8 +1,14 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import { OrganizerNavbar } from '../../components/organizer/OrganizerNavbar';
-import { useToast } from '../../components/Toast';
+import { useToast } from '../../components/toastContext';
 import organizerApi from '../../services/organizerApi';
+import { errorMessage } from '../../services/api';
+import { toLocalInput } from '../../lib/format';
+import { useNow } from '../../hooks/useNow';
+
+const MAX_CATEGORIES = 10;
+const MAX_TOTAL_SEATS = 20000;
 
 const CATEGORIES = ['Concert', 'Comedy', 'Sports', 'Theatre'];
 let nextCatId = 1;
@@ -28,6 +34,8 @@ export default function OrgAddEventPage() {
   const [touched, setTouched] = useState({});
   const [showAll, setShowAll] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [bookedSeats, setBookedSeats] = useState(0);
+  const now = useNow(30_000);
 
   useEffect(() => {
     if (!isEdit) return;
@@ -40,9 +48,10 @@ export default function OrgAddEventPage() {
         setCity(ev.city);
         setVenue(ev.venue);
         // datetime-local input needs "YYYY-MM-DDTHH:mm", not the ISO string the API returns.
-        setDate(new Date(ev.date).toISOString().slice(0, 16));
+        setDate(toLocalInput(ev.date));
         setDesc(ev.description || '');
         setExistingCategories(ev.categories || []);
+        setBookedSeats(ev.bookedSeats || 0);
       } catch {
         toast.error('Could not load that event');
         navigate('/organizer/events');
@@ -50,11 +59,11 @@ export default function OrgAddEventPage() {
         setLoadingEvent(false);
       }
     })();
-  }, [id]);
+  }, [id, isEdit, navigate, toast]);
 
   const touch = (key) => setTouched((p) => ({ ...p, [key]: true }));
   const editCat = (catId, field, val) => setCats((p) => p.map((c) => (c.id === catId ? { ...c, [field]: val } : c)));
-  const addCat = () => setCats((p) => [...p, newCat()]);
+  const addCat = () => setCats((p) => (p.length >= MAX_CATEGORIES ? p : [...p, newCat()]));
   const removeCat = (catId) => setCats((p) => (p.length <= 1 ? p : p.filter((c) => c.id !== catId)));
 
   const errors = useMemo(() => {
@@ -63,7 +72,7 @@ export default function OrgAddEventPage() {
     if (!city.trim()) e.city = 'Add the city.';
     if (!venue.trim()) e.venue = 'Add the venue.';
     if (!date) e.date = 'Pick a date and time.';
-    else if (new Date(date).getTime() <= Date.now()) e.date = 'Date must be in the future.';
+    else if (new Date(date).getTime() <= now) e.date = 'Date must be in the future.';
 
     if (!isEdit) {
       const seen = {};
@@ -81,8 +90,12 @@ export default function OrgAddEventPage() {
         else if (!(p > 0)) e['p' + c.id] = 'Must be above ₹0.';
       });
     }
+    if (!isEdit) {
+      const total = cats.reduce((a, c) => a + (Number.isInteger(Number(c.seats)) && Number(c.seats) > 0 ? Number(c.seats) : 0), 0);
+      if (total > MAX_TOTAL_SEATS) e.total = `An event can have at most ${MAX_TOTAL_SEATS.toLocaleString('en-IN')} seats.`;
+    }
     return e;
-  }, [title, city, venue, date, cats, isEdit]);
+  }, [title, city, venue, date, cats, isEdit, now]);
 
   const show = (k) => !!errors[k] && (showAll || touched[k]);
   const valid = Object.keys(errors).length === 0;
@@ -101,7 +114,7 @@ export default function OrgAddEventPage() {
     setSubmitting(true);
     try {
       if (isEdit) {
-        await organizerApi.updateEvent(id, { title: title.trim(), category, city: city.trim(), venue: venue.trim(), date: new Date(date).toISOString(), description: desc.trim() || undefined });
+        await organizerApi.updateEvent(id, { title: title.trim(), category, city: city.trim(), venue: venue.trim(), date: new Date(date).toISOString(), description: desc.trim() });
         toast.success('Event updated');
       } else {
         await organizerApi.createEvent({
@@ -117,7 +130,7 @@ export default function OrgAddEventPage() {
       }
       navigate('/organizer/events');
     } catch (err) {
-      toast.error(err.response?.data?.error || 'Could not save the event');
+      toast.error(errorMessage(err, 'Could not save the event'));
     } finally {
       setSubmitting(false);
     }
@@ -148,6 +161,11 @@ export default function OrgAddEventPage() {
             ? 'Event details can be changed any time before it has bookings. Seat categories are fixed once the event is created — its seats already exist.'
             : 'Fill in the details and seat categories. Seats are generated automatically when you create the event.'}
         </p>
+        {isEdit && bookedSeats > 0 && (
+          <p role="status" className="max-w-2xl mt-2 px-4 py-3 rounded-xl bg-gold-muted border border-gold/35 text-sm text-gray-light">
+            This event has {bookedSeats} booked {bookedSeats === 1 ? 'seat' : 'seats'}, so its details are locked to keep tickets accurate.
+          </p>
+        )}
       </div>
 
       <form onSubmit={handleSubmit} noValidate className="flex flex-col md:flex-row gap-8 items-start px-4 md:px-16 pb-12">
@@ -272,10 +290,11 @@ export default function OrgAddEventPage() {
                   );
                 })}
               </div>
-              <button type="button" onClick={addCat}
-                className="h-[52px] rounded-xl border-[1.5px] border-dashed border-dark-border-hover text-gold text-sm font-bold flex items-center justify-center gap-2 hover:bg-gold/5 hover:border-gold cursor-pointer">
+              {errors.total && (showAll || totalSeats > 0) && <p role="alert" className="fade text-danger text-[13px] m-0">{errors.total}</p>}
+              <button type="button" onClick={addCat} disabled={cats.length >= MAX_CATEGORIES}
+                className="h-[52px] rounded-xl border-[1.5px] border-dashed border-dark-border-hover text-gold text-sm font-bold flex items-center justify-center gap-2 hover:bg-gold/5 hover:border-gold cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
-                Add another category
+                {cats.length >= MAX_CATEGORIES ? `Up to ${MAX_CATEGORIES} categories` : 'Add another category'}
               </button>
             </section>
           )}
@@ -331,10 +350,10 @@ export default function OrgAddEventPage() {
 
         {isEdit && (
           <div className="w-full md:w-[280px] shrink-0 flex flex-col gap-3 md:sticky md:top-6">
-            <button type="submit" disabled={!valid || submitting}
+            <button type="submit" disabled={!valid || submitting || bookedSeats > 0}
               className="h-[52px] rounded-xl text-[15px] font-bold bg-gold text-dark-bg hover:bg-gold-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 cursor-pointer">
               {submitting && <svg className="spin-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round"><path d="M12 3a9 9 0 1 1-9 9" /></svg>}
-              {submitting ? 'Saving…' : 'Save changes'}
+              {submitting ? 'Saving…' : bookedSeats > 0 ? 'Locked (has bookings)' : 'Save changes'}
             </button>
             <Link to="/organizer/events" className="h-[52px] rounded-xl border border-dark-border text-sm font-semibold flex items-center justify-center hover:bg-dark-card-hover">
               Cancel

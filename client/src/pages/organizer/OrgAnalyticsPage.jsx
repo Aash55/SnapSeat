@@ -1,11 +1,12 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { OrganizerNavbar } from '../../components/organizer/OrganizerNavbar';
 import { organizerApi } from '../../services/organizerApi';
-import { useToast } from '../../components/Toast';
+import { useToast } from '../../components/toastContext';
+import { CATEGORY_COLORS } from '../../lib/categoryColors';
 
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-const PALETTE = ['#F5B544', '#3987e5', '#d95926', '#199e70', '#c05fd3', '#5fb0c0'];
+const PALETTE = CATEGORY_COLORS;
 
 const fmt = (n) => Number(n || 0).toLocaleString('en-IN');
 const compact = (v) => (v >= 100000 ? `${Math.round(v / 10000) / 10}L` : v >= 1000 ? `${Math.round(v / 100) / 10}k` : String(Math.round(v)));
@@ -35,27 +36,23 @@ export default function OrgAnalyticsPage() {
 
   const [loadError, setLoadError] = useState(false);
 
-  const load = useCallback(async (eventId) => {
-    setLoading(true);
-    try {
-      const res = await organizerApi.getAnalytics(eventId);
-      setData(res.data);
-      setLoadError(false);
-      setLimit(10);
-    } catch {
-      // Same rule as the dashboard: if this is the first load for this scope, `data`
-      // stays null — every unguarded `data.xxx` below would throw and blank the page.
-      // The `d` fallback object below keeps rendering safe; this flag just controls
-      // whether we show an explicit "couldn't load" banner instead of pretending
-      // everything is zero.
-      setLoadError(true);
-      toast.error('Could not load analytics.');
-    } finally {
-      setLoading(false);
-    }
-  }, [toast]);
+  const [reloadKey, setReloadKey] = useState(0);
 
-  useEffect(() => { load(selected); }, [selected, load]);
+  useEffect(() => {
+    let alive = true;
+    organizerApi.getAnalytics(selected)
+      .then((res) => { if (!alive) return; setData(res.data); setLoadError(false); setLimit(10); })
+      .catch(() => {
+        if (!alive) return;
+        // `data` may stay null; the `d` fallback below keeps rendering safe and the banner explains.
+        setLoadError(true);
+        toast.error('Could not load analytics.');
+      })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [selected, toast, reloadKey]);
+  const reload = () => { setLoading(true); setReloadKey((k) => k + 1); };
+  const choose = (value) => { setLoading(true); setSelected(value); };
 
   const catColor = useMemo(() => {
     const map = {};
@@ -92,7 +89,7 @@ export default function OrgAnalyticsPage() {
             <label htmlFor="evsel" className="font-label text-[11px] tracking-wider text-gray-text">SHOWING</label>
             <div className="relative">
               <select
-                id="evsel" value={selected} onChange={(e) => setSelected(e.target.value)}
+                id="evsel" value={selected} onChange={(e) => choose(e.target.value)}
                 className="w-full h-[46px] box-border px-3.5 pr-10 rounded-[10px] text-[15px] font-semibold bg-[#121017] border border-dark-border focus:border-gold outline-none appearance-none cursor-pointer"
               >
                 <option value="all">All events</option>
@@ -132,7 +129,7 @@ export default function OrgAnalyticsPage() {
                 <span className="text-xs text-gray-text">Check that the server is running, then retry.</span>
               </div>
             </div>
-            <button type="button" onClick={() => load(selected)} className="h-10 px-4 rounded-[10px] border border-dark-border text-sm font-semibold hover:bg-dark-card-hover hover:border-dark-border-hover transition-colors shrink-0">
+            <button type="button" onClick={reload} className="h-10 px-4 rounded-[10px] border border-dark-border text-sm font-semibold hover:bg-dark-card-hover hover:border-dark-border-hover transition-colors shrink-0">
               Retry
             </button>
           </div>
@@ -179,7 +176,7 @@ export default function OrgAnalyticsPage() {
                           <div className="h-px bg-dark-border" /><div className="h-px bg-dark-border" /><div className="h-px bg-dark-border" /><div className="h-px bg-dark-border" /><div className="h-px bg-dark-border-hover" />
                         </div>
                         <div className="absolute inset-0 flex items-end">
-                          {daily.map((d, i) => {
+                          {daily.map((d) => {
                             const v = metric === 'rev' ? d.revenue : d.seats;
                             const h = Math.round((v / maxV) * 1000) / 10;
                             const label = `${d.date}: ${metric === 'rev' ? `₹${fmt(d.revenue)}` : `${fmt(d.seats)} seats`}, ${d.bookings} bookings`;

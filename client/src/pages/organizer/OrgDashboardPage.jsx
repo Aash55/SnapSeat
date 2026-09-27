@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { OrganizerNavbar } from '../../components/organizer/OrganizerNavbar';
 import { organizerApi } from '../../services/organizerApi';
-import { useToast } from '../../components/Toast';
+import { useToast } from '../../components/toastContext';
+import { useNow } from '../../hooks/useNow';
 
 const MON = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -15,9 +16,9 @@ const time12 = (d) => {
   return `${h}:${m} ${ap}`;
 };
 
-const ago = (iso) => {
+const ago = (iso, now) => {
   const t = new Date(iso).getTime();
-  const m = Math.round((Date.now() - t) / 60000);
+  const m = Math.round((now - t) / 60000);
   if (m < 1) return 'just now';
   if (m < 60) return `${m} min ago`;
   const h = Math.round(m / 60);
@@ -53,39 +54,39 @@ export default function OrgDashboardPage() {
   const [upcoming, setUpcoming] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
-  const [syncedAt, setSyncedAt] = useState(Date.now());
+  const [syncedAt, setSyncedAt] = useState(() => Date.now());
+  const now = useNow(30_000);
   const toast = useToast();
 
-  const load = useCallback(async (silent) => {
-    if (!silent) setLoading(true);
-    try {
-      const [dashRes, eventsRes] = await Promise.all([organizerApi.getDashboard(), organizerApi.listEvents()]);
-      setDash(dashRes.data);
-      setLoadError(false);
-      const now = Date.now();
-      const up = eventsRes.data
-        .filter((e) => new Date(e.date).getTime() > now)
-        .sort((a, b) => new Date(a.date) - new Date(b.date))
-        .slice(0, 5);
-      setUpcoming(up);
-      setSyncedAt(Date.now());
-    } catch {
-      // A background (silent) refresh failing just keeps showing the last good data —
-      // no need to alarm the person over a single missed poll. But the FIRST load failing
-      // means we have nothing to show at all, so that has to surface as a real error
-      // state instead of silently rendering `dash.something` and crashing the page.
-      setLoadError(true);
-      if (!silent) toast.error('Could not load dashboard.');
-    } finally {
-      if (!silent) setLoading(false);
-    }
-  }, [toast]);
+  const [reloadKey, setReloadKey] = useState(0);
 
+  // First load shows skeletons; every 20s after that refreshes silently, keeping the last good
+  // data on a failed poll. Only a failed FIRST load shows the error banner.
   useEffect(() => {
-    load(false);
-    const iv = setInterval(() => load(true), 20000);
-    return () => clearInterval(iv);
-  }, [load]);
+    let alive = true;
+    const fetchAll = (silent) => Promise.all([organizerApi.getDashboard(), organizerApi.listEvents()])
+      .then(([dashRes, eventsRes]) => {
+        if (!alive) return;
+        const t = Date.now();
+        setDash(dashRes.data);
+        setLoadError(false);
+        setUpcoming(eventsRes.data
+          .filter((e) => new Date(e.date).getTime() > t)
+          .sort((a, b) => new Date(a.date) - new Date(b.date))
+          .slice(0, 5));
+        setSyncedAt(t);
+      })
+      .catch(() => {
+        if (!alive) return;
+        setLoadError(true);
+        if (!silent) toast.error('Could not load dashboard.');
+      })
+      .finally(() => { if (alive && !silent) setLoading(false); });
+    fetchAll(false);
+    const iv = setInterval(() => fetchAll(true), 20000);
+    return () => { alive = false; clearInterval(iv); };
+  }, [toast, reloadKey]);
+  const load = () => { setLoading(true); setReloadKey((k) => k + 1); };
 
   const [secsAgo, setSecsAgo] = useState(0);
   useEffect(() => {
@@ -145,7 +146,7 @@ export default function OrgDashboardPage() {
                 <span className="text-xs text-gray-text">Check that the server is running, then retry.</span>
               </div>
             </div>
-            <button type="button" onClick={() => load(false)} className="h-10 px-4 rounded-[10px] border border-dark-border text-sm font-semibold hover:bg-dark-card-hover hover:border-dark-border-hover transition-colors shrink-0">
+            <button type="button" onClick={load} className="h-10 px-4 rounded-[10px] border border-dark-border text-sm font-semibold hover:bg-dark-card-hover hover:border-dark-border-hover transition-colors shrink-0">
               Retry
             </button>
           </div>
@@ -201,7 +202,7 @@ export default function OrgDashboardPage() {
             )}
             {!loading && upcoming.map((e) => {
               const d = new Date(e.date);
-              const days = Math.ceil((d.getTime() - Date.now()) / 86400000);
+              const days = Math.ceil((d.getTime() - now) / 86400000);
               return (
                 <Link key={e.id} to="/organizer/events" className="flex items-center gap-4 px-6 py-3.5 border-b border-dark-border hover:bg-dark-card-hover/60 transition-colors group">
                   <div className="w-12 h-12 shrink-0 rounded-[10px] bg-[#121017] border border-dark-border-hover flex flex-col items-center justify-center gap-0.5">
@@ -250,7 +251,7 @@ export default function OrgDashboardPage() {
                 <div className="flex-grow min-w-0 flex flex-col gap-0.5">
                   <span className="text-sm font-bold truncate">{b.eventTitle}</span>
                   <span className="text-[13px] text-gray-text">
-                    <span className="font-label text-gray-light">{b.seats} {b.seats === 1 ? 'seat' : 'seats'}</span> &middot; {ago(b.createdAt)}
+                    <span className="font-label text-gray-light">{b.seats} {b.seats === 1 ? 'seat' : 'seats'}</span> &middot; {ago(b.createdAt, now)}
                   </span>
                 </div>
                 <span className="shrink-0 font-label text-sm">&#8377;{fmt(b.amount)}</span>

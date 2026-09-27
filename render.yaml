@@ -1,0 +1,40 @@
+# Render Blueprint: API (Node web service) + web app (static site).
+# Database: use Neon (free tier doesn't expire) and paste its connection string as DATABASE_URL.
+services:
+  - type: web
+    name: snapseat-api
+    runtime: node
+    plan: free
+    rootDir: server
+    buildCommand: npm ci && npm run migrate
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "22"
+      - key: DATABASE_URL
+        sync: false          # paste the Neon connection string in the dashboard
+      - key: JWT_SECRET
+        generateValue: true
+      - key: WEBHOOK_SECRET
+        generateValue: true
+      - key: CORS_ORIGIN
+        sync: false          # e.g. https://snapseat-web.onrender.com
+      - key: ALLOW_TEST_PAYMENT_HOOKS
+        value: "false"
+
+  - type: web
+    name: snapseat-web
+    runtime: static
+    rootDir: client
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: VITE_API_URL
+        sync: false          # e.g. https://snapseat-api.onrender.com/api
