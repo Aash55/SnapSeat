@@ -7,6 +7,10 @@ bookings, revenue and occupancy.
 
 **Stack:** Node 22 · Express 5 · PostgreSQL · Sequelize · React 19 · Vite · Tailwind 4
 
+- **Live app:** https://snapseat-web.onrender.com
+- **Demo login:** `user1@test.com` / `password123` (customer) · `organizer@snapseat.com` / `password123` (organizer portal at `/organizer/login`)
+- **Note:** free Render plan, so the first request after a while takes ~30–60 s to wake up.
+
 ## How the booking core works
 
 ```
