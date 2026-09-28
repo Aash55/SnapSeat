@@ -1,5 +1,7 @@
 # SnapSeat
 
+[![CI](https://github.com/Aash55/SnapSeat/actions/workflows/ci.yml/badge.svg)](https://github.com/Aash55/SnapSeat/actions/workflows/ci.yml)
+
 Event ticketing with **atomic seat locking** and **idempotent payments**. Customers pick up to 4 seats,
 hold them for 5 minutes, and pay. Two people can never end up with the same seat, and a retried
 payment can never charge twice. Organizers create events with priced seat categories and track
@@ -81,6 +83,9 @@ indexes only exist there. They include: 10 users racing for one seat, the same p
 at once, two keys for one hold, retry-after-decline, a payment landing after the hold expired, the
 sweeper racing a payment (forced interleaving plus a 25-payment stress run), signed-webhook checks,
 and an invariant check (no booked seat without a booking, no hold charged twice, …).
+
+GitHub Actions runs these tests against a Postgres 16 service container on every push, plus the
+client lint and production build (`.github/workflows/ci.yml`).
 
 ## Deploy (Render + Neon)
 
